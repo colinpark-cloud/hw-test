@@ -1,0 +1,9 @@
+build-aarch64/
+build-win/
+build-x86_64/
+dist-win/
+*.o
+*.obj
+*.a
+*.so
+*.exe
