@@ -226,7 +226,7 @@ void CommTest::buildUi() {
 #ifdef Q_OS_WIN
         const QString d = "COM1";
 #else
-        const QString d = pcMode ? "/dev/ttyUSB0" : "/dev/ttymxc3";
+        const QString d = pcMode ? "/dev/ttyUSB0" : "/dev/ttyACM0";
 #endif
         r.detail=d; r.device=d; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
@@ -245,8 +245,8 @@ void CommTest::buildUi() {
         const QString d = "COM3";
         r.detail = "RS485  COM3";
 #else
-        const QString d = pcMode ? "/dev/ttyUSB2" : "/dev/ttyACM0";
-        r.detail = (pcMode ? "RS485  /dev/ttyUSB2" : "RS485  /dev/ttyACM0");
+        const QString d = pcMode ? "/dev/ttyUSB2" : "/dev/ttymxc3";
+        r.detail = (pcMode ? "RS485  /dev/ttyUSB2" : "RS485  /dev/ttymxc3");
 #endif
         r.device=d; r.comType=1; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
@@ -899,7 +899,7 @@ void CommTest::toggleRun() {
 void CommTest::switchBoardMode(int mode) {
     m_boardMode = mode;
     static const QString devices[3][3] = {
-        {"/dev/ttymxc3", "/dev/ttymxc2", "/dev/ttyACM0"}, // 0: iMX8MP
+        {"/dev/ttyACM0",  "/dev/ttymxc2", "/dev/ttymxc3"}, // 0: iMX8MP
         {"/dev/ttyUSB0", "/dev/ttyUSB1",  "/dev/ttyUSB2"}, // 1: Linux PC
         {"COM1",         "COM2",          "COM3"},          // 2: Windows
     };
