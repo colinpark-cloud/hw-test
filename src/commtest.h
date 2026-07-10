@@ -16,6 +16,7 @@ public:
 private slots:
     void toggleRun();
     void onTick();
+    void switchBoardMode(int mode); // 0=iMX8MP, 1=Linux, 2=Windows
 
 private:
     enum class TargetKind { Com1, Com2, Com3, Lan1, Lan2 };
@@ -71,6 +72,8 @@ private:
     QPushButton* m_runBtn       = nullptr;
     QPushButton* m_masterTxBtn  = nullptr;
     QPushButton* m_masterRxBtn  = nullptr;
+    QPushButton* m_modeBtns[3]  = {};   // 0=iMX8MP, 1=Linux, 2=Windows
+    int          m_boardMode    = 0;
     QTimer*      m_timer        = nullptr;
     QTimer*      m_clockTimer   = nullptr;
     int  m_cycle   = 0;

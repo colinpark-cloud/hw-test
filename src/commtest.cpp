@@ -171,6 +171,27 @@ void CommTest::buildUi() {
     masterLayout->addWidget(m_masterTxBtn);
     masterLayout->addWidget(m_masterRxBtn);
     masterLayout->addStretch();
+    {
+        const char* labels[3] = {"Board모드", "PC (Linux)", "PC (Windows)"};
+        for (int i = 0; i < 3; ++i) {
+            m_modeBtns[i] = new QPushButton(labels[i]);
+            m_modeBtns[i]->setFixedHeight(24);
+            m_modeBtns[i]->setFixedWidth(90);
+            connect(m_modeBtns[i], &QPushButton::clicked, this, [this, i]() {
+                switchBoardMode(i);
+            });
+            masterLayout->addWidget(m_modeBtns[i]);
+        }
+        /* apply initial highlight */
+        for (int i = 0; i < 3; ++i) {
+            bool sel = (i == m_boardMode);
+            m_modeBtns[i]->setStyleSheet(sel
+                ? "QPushButton{font-size:11px;font-weight:700;background:#dbeafe;color:#1e3a8a;"
+                  "border:1px solid #93c5fd;border-radius:8px;padding:2px 6px;}"
+                : "QPushButton{font-size:11px;font-weight:700;background:#f1f5f9;color:#374151;"
+                  "border:1px solid #c9d3df;border-radius:8px;padding:2px 6px;}");
+        }
+    }
     layout->addWidget(masterRow);
 
     /* grid header */
@@ -192,12 +213,13 @@ void CommTest::buildUi() {
         grid->addWidget(h, 0, col);
     }
 
-    /* row data */
+    /* row data — default mode: 0=iMX8MP, 1=Linux PC, 2=Windows */
 #ifdef Q_OS_WIN
-    const bool pcMode = true;
+    m_boardMode = 2;
 #else
-    const bool pcMode = QCoreApplication::arguments().contains("--pc");
+    m_boardMode = QCoreApplication::arguments().contains("--pc") ? 1 : 0;
 #endif
+    const bool pcMode = (m_boardMode != 0);
     const int defaultTxRx = QCoreApplication::arguments().contains("--tx-default") ? 0 : 1;
     {
         TargetRow r; r.kind=TargetKind::Com1; r.title="COM1";
@@ -273,9 +295,9 @@ void CommTest::buildUi() {
         titleRowLayout->addStretch();
         leftLayout->addWidget(titleRow);
 
-        /* PC mode: editable device path field */
-        if (pcMode && (row.kind == TargetKind::Com1 || row.kind == TargetKind::Com2
-                || row.kind == TargetKind::Com3)) {
+        /* editable device path field for all COM rows */
+        if (row.kind == TargetKind::Com1 || row.kind == TargetKind::Com2
+                || row.kind == TargetKind::Com3) {
             row.deviceEdit = new QLineEdit(row.device);
             row.deviceEdit->setFixedHeight(24);
             row.deviceEdit->setStyleSheet(
@@ -844,5 +866,28 @@ void CommTest::toggleRun() {
         if (m_timer) m_timer->stop();
         closeComFds();
         resetCounters();
+    }
+}
+
+void CommTest::switchBoardMode(int mode) {
+    m_boardMode = mode;
+    static const QString devices[3][3] = {
+        {"/dev/ttymxc3", "/dev/ttymxc2", "/dev/ttyACM0"}, // 0: iMX8MP
+        {"/dev/ttyS0",   "/dev/ttyS1",   "/dev/ttyS2"},   // 1: Linux PC
+        {"COM1",         "COM2",          "COM3"},          // 2: Windows
+    };
+    for (int i = 0; i < 3 && i < m_rows.size(); ++i) {
+        m_rows[i].device = devices[mode][i];
+        if (m_rows[i].deviceEdit)
+            m_rows[i].deviceEdit->setText(devices[mode][i]);
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (!m_modeBtns[i]) continue;
+        bool sel = (i == mode);
+        m_modeBtns[i]->setStyleSheet(sel
+            ? "QPushButton{font-size:11px;font-weight:700;background:#dbeafe;color:#1e3a8a;"
+              "border:1px solid #93c5fd;border-radius:8px;padding:2px 6px;}"
+            : "QPushButton{font-size:11px;font-weight:700;background:#f1f5f9;color:#374151;"
+              "border:1px solid #c9d3df;border-radius:8px;padding:2px 6px;}");
     }
 }
