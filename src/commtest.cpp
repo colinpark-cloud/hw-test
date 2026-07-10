@@ -226,7 +226,7 @@ void CommTest::buildUi() {
 #ifdef Q_OS_WIN
         const QString d = "COM1";
 #else
-        const QString d = pcMode ? "/dev/ttyS0" : "/dev/ttymxc3";
+        const QString d = pcMode ? "/dev/ttyUSB0" : "/dev/ttymxc3";
 #endif
         r.detail=d; r.device=d; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
@@ -235,7 +235,7 @@ void CommTest::buildUi() {
 #ifdef Q_OS_WIN
         const QString d = "COM2";
 #else
-        const QString d = pcMode ? "/dev/ttyS1" : "/dev/ttymxc2";
+        const QString d = pcMode ? "/dev/ttyUSB1" : "/dev/ttymxc2";
 #endif
         r.detail=d; r.device=d; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
@@ -245,8 +245,8 @@ void CommTest::buildUi() {
         const QString d = "COM3";
         r.detail = "RS485  COM3";
 #else
-        const QString d = pcMode ? "/dev/ttyS2" : "/dev/ttyACM0";
-        r.detail = (pcMode ? "RS485  /dev/ttyS2" : "RS485  /dev/ttyACM0");
+        const QString d = pcMode ? "/dev/ttyUSB2" : "/dev/ttyACM0";
+        r.detail = (pcMode ? "RS485  /dev/ttyUSB2" : "RS485  /dev/ttyACM0");
 #endif
         r.device=d; r.comType=1; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
@@ -295,19 +295,26 @@ void CommTest::buildUi() {
         titleRowLayout->addStretch();
         leftLayout->addWidget(titleRow);
 
-        /* editable device path field for all COM rows */
+        /* editable device path + baud rate for all COM rows */
         if (row.kind == TargetKind::Com1 || row.kind == TargetKind::Com2
                 || row.kind == TargetKind::Com3) {
+            auto *devRow = new QWidget;
+            auto *devLayout = new QHBoxLayout(devRow);
+            devLayout->setContentsMargins(0, 0, 0, 0);
+            devLayout->setSpacing(4);
+
             row.deviceEdit = new QLineEdit(row.device);
             row.deviceEdit->setFixedHeight(24);
             row.deviceEdit->setStyleSheet(
                 "QLineEdit{font-size:11px;color:#374151;background:#f9fafb;"
                 "border:1px solid #d1d5db;border-radius:6px;padding:1px 6px;}");
-            leftLayout->addWidget(row.deviceEdit);
             connect(row.deviceEdit, &QLineEdit::textChanged, this,
                 [this, i](const QString& text) {
                     if (i < m_rows.size()) m_rows[i].device = text;
                 });
+
+            devLayout->addWidget(row.deviceEdit, 1);
+            leftLayout->addWidget(devRow);
         }
 
         if (row.kind == TargetKind::Com1 || row.kind == TargetKind::Com2) {
@@ -499,7 +506,10 @@ bool CommTest::checkComPort(const QString& device) const {
     CloseHandle(h);
     return true;
 #else
-    return QFileInfo::exists(device);
+    int fd = ::open(device.toStdString().c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return false;
+    ::close(fd);
+    return true;
 #endif
 }
 
@@ -695,22 +705,33 @@ void CommTest::closeComFds() {
 
 #else
 /* ── Linux serial ───────────────────────────────────────── */
-static int openSerial(const QString& device, int flowCtrl) {
+static speed_t toBaudConst(int baud) {
+    switch (baud) {
+        case 19200:  return B19200;
+        case 38400:  return B38400;
+        case 57600:  return B57600;
+        case 115200: return B115200;
+        default:     return B9600;
+    }
+}
+
+static int openSerial(const QString& device, int flowCtrl, int baudRate = 9600) {
     int fd = ::open(device.toStdString().c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) return -1;
     struct termios tio{};
     tio.c_cflag = CS8 | CLOCAL | CREAD;
     tio.c_iflag = IGNPAR;
-    cfsetispeed(&tio, B9600); cfsetospeed(&tio, B9600);
+    speed_t spd = toBaudConst(baudRate);
+    cfsetispeed(&tio, spd); cfsetospeed(&tio, spd);
     if (flowCtrl == 1) tio.c_cflag |= CRTSCTS;
     else if (flowCtrl == 2) tio.c_iflag |= (IXON | IXOFF);
-    tcflush(fd, TCOFLUSH);
+    tcflush(fd, TCIOFLUSH);
     tcsetattr(fd, TCSANOW, &tio);
     return fd;
 }
 
 bool CommTest::checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl) const {
-    int fd = openSerial(device, flowCtrl);
+    int fd = openSerial(device, flowCtrl, 9600);
     if (fd < 0) return false;
     bool ok = (::write(fd, payload.constData(), payload.size()) == payload.size());
     ::close(fd);
@@ -721,7 +742,7 @@ bool CommTest::checkSerialRx(int fd) const {
     if (fd < 0) return false;
     char buf[256]{};
     fd_set rfds; FD_ZERO(&rfds); FD_SET(fd, &rfds);
-    timeval tv{0, 0};
+    timeval tv{0, 200000}; // 200ms wait
     if (::select(fd+1, &rfds, nullptr, nullptr, &tv) > 0 && FD_ISSET(fd, &rfds)) {
         ssize_t rd = ::read(fd, buf, sizeof(buf) - 1);
         return rd > 0;
@@ -733,7 +754,7 @@ void CommTest::openComFds() {
     for (int i = 0; i < 3; ++i) {
         if (m_comFds[i] >= 0) { ::close(m_comFds[i]); m_comFds[i] = -1; }
         const auto &r = m_rows[i];
-        m_comFds[i] = openSerial(r.device, r.flowCtrl);
+        m_comFds[i] = openSerial(r.device, r.flowCtrl, 9600);
     }
 }
 
@@ -873,7 +894,7 @@ void CommTest::switchBoardMode(int mode) {
     m_boardMode = mode;
     static const QString devices[3][3] = {
         {"/dev/ttymxc3", "/dev/ttymxc2", "/dev/ttyACM0"}, // 0: iMX8MP
-        {"/dev/ttyS0",   "/dev/ttyS1",   "/dev/ttyS2"},   // 1: Linux PC
+        {"/dev/ttyUSB0", "/dev/ttyUSB1",  "/dev/ttyUSB2"}, // 1: Linux PC
         {"COM1",         "COM2",          "COM3"},          // 2: Windows
     };
     for (int i = 0; i < 3 && i < m_rows.size(); ++i) {
