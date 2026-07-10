@@ -624,8 +624,8 @@ bool CommTest::checkSerialRoundTrip(const QString& device) const {
     struct termios tio{};
     tio.c_cflag = CS8 | CLOCAL | CREAD;
     tio.c_iflag = IGNPAR;
-    cfsetispeed(&tio, B9600);
-    cfsetospeed(&tio, B9600);
+    cfsetispeed(&tio, B115200);
+    cfsetospeed(&tio, B115200);
     tcflush(fd, TCIFLUSH);
     tcsetattr(fd, TCSANOW, &tio);
     if (::write(fd, payload.constData(), payload.size()) != payload.size()) {
@@ -653,7 +653,7 @@ static HANDLE openSerial(const QString& device, int flowCtrl) {
     DCB dcb{};
     dcb.DCBlength = sizeof(dcb);
     if (!GetCommState(h, &dcb)) { CloseHandle(h); return INVALID_HANDLE_VALUE; }
-    dcb.BaudRate = CBR_9600;
+    dcb.BaudRate = CBR_115200;
     dcb.ByteSize = 8;
     dcb.StopBits = ONESTOPBIT;
     dcb.Parity   = NOPARITY;
@@ -731,7 +731,7 @@ static int openSerial(const QString& device, int flowCtrl, int baudRate = 9600) 
 }
 
 bool CommTest::checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl) const {
-    int fd = openSerial(device, flowCtrl, 9600);
+    int fd = openSerial(device, flowCtrl, 115200);
     if (fd < 0) return false;
     bool ok = (::write(fd, payload.constData(), payload.size()) == payload.size());
     ::close(fd);
@@ -754,7 +754,7 @@ void CommTest::openComFds() {
     for (int i = 0; i < 3; ++i) {
         if (m_comFds[i] >= 0) { ::close(m_comFds[i]); m_comFds[i] = -1; }
         const auto &r = m_rows[i];
-        m_comFds[i] = openSerial(r.device, r.flowCtrl, 9600);
+        m_comFds[i] = openSerial(r.device, r.flowCtrl, 115200);
     }
 }
 
