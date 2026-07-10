@@ -688,9 +688,12 @@ bool CommTest::checkSerialRx(void* h) const {
 
 void CommTest::openComFds() {
     for (int i = 0; i < 3; ++i) {
-        if (m_comFds[i] != INVALID_HANDLE_VALUE) { CloseHandle((HANDLE)m_comFds[i]); }
-        const auto &r = m_rows[i];
-        m_comFds[i] = (void*)openSerial(r.device, r.flowCtrl);
+        if (m_comFds[i] != INVALID_HANDLE_VALUE) { CloseHandle((HANDLE)m_comFds[i]); m_comFds[i] = (void*)(intptr_t)-1; }
+        // TX mode: open/close per-tick — don't hold exclusive handle here
+        if (i < m_rows.size() && m_rows[i].txrxMode == 1) {
+            const auto &r = m_rows[i];
+            m_comFds[i] = (void*)openSerial(r.device, r.flowCtrl);
+        }
     }
 }
 
@@ -698,7 +701,7 @@ void CommTest::closeComFds() {
     for (int i = 0; i < 3; ++i) {
         if (m_comFds[i] != INVALID_HANDLE_VALUE) {
             CloseHandle((HANDLE)m_comFds[i]);
-            m_comFds[i] = INVALID_HANDLE_VALUE;
+            m_comFds[i] = (void*)(intptr_t)-1;
         }
     }
 }
@@ -753,8 +756,11 @@ bool CommTest::checkSerialRx(int fd) const {
 void CommTest::openComFds() {
     for (int i = 0; i < 3; ++i) {
         if (m_comFds[i] >= 0) { ::close(m_comFds[i]); m_comFds[i] = -1; }
-        const auto &r = m_rows[i];
-        m_comFds[i] = openSerial(r.device, r.flowCtrl, 9600);
+        // TX mode: open/close per-tick — only keep RX ports open
+        if (i < m_rows.size() && m_rows[i].txrxMode == 1) {
+            const auto &r = m_rows[i];
+            m_comFds[i] = openSerial(r.device, r.flowCtrl, 9600);
+        }
     }
 }
 
@@ -823,11 +829,11 @@ void CommTest::onTick() {
             bool ok;
             if (s.isLan) {
                 ok = checkLanAnyLink(s.peers, s.ip);
-            } else if (!checkComPort(s.device)) {
-                ok = false;
             } else if (s.txrxMode == 0) {
+                // TX: open exclusively per-tick (no persistent fd)
                 ok = checkSerialTx(s.device, s.payload + "\n", s.flowCtrl);
             } else {
+                // RX: use persistent fd opened at Run time
                 ok = checkSerialRx(s.persistFd);
             }
             (*results)[i] = {s.idx, ok};
