@@ -553,11 +553,11 @@ void CommTest::buildUi() {
 
     auto *bSlider = new QSlider(Qt::Horizontal);
     bSlider->setRange(20, 255);
-    int curBright = 150;
     { QFile f("/sys/class/backlight/backlight-lvds/brightness");
-      if (f.open(QIODevice::ReadOnly))
-          curBright = f.readAll().trimmed().toInt(); }
-    bSlider->setValue(curBright);
+      if (f.open(QIODevice::WriteOnly)) f.write("255"); }
+    { QFile f("/sys/class/backlight/backlight-lvds/power/control");
+      if (f.open(QIODevice::WriteOnly)) f.write("on"); }
+    bSlider->setValue(255);
     bSlider->setStyleSheet(
         "QSlider::groove:horizontal{height:8px;background:#d1d5db;border-radius:4px;}"
         "QSlider::handle:horizontal{width:28px;height:28px;margin:-10px 0;background:#3b82f6;"
@@ -565,7 +565,7 @@ void CommTest::buildUi() {
         "QSlider::sub-page:horizontal{background:#3b82f6;border-radius:4px;}");
     bl->addWidget(bSlider, 1);
 
-    auto *bVal = new QLabel(QString::number(curBright));
+    auto *bVal = new QLabel("255");
     bVal->setFixedWidth(30);
     bVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     bVal->setStyleSheet("font-size:13px;font-weight:700;color:#374151;");
