@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include <QLabel>
+#include <QPushButton>
 #include <QTimer>
 
 class CameraView;
@@ -17,10 +18,15 @@ public:
 private slots:
     void updateStatus();
     void pollIrda();
+    void testAudio();
+    void testUsb(int idx);   // 0=USB1(/dev/sda) 1=USB2(/dev/sdb)
+    void testSd();
 
 private:
     QWidget* makePanel(const QString& title, QLabel** valueOut);
     quint16 i2cGetWord(int bus, int addr, int reg, bool* ok);
+    bool runStorageRW(const QString& devNode, const QString& label);
+    void setDevResult(QLabel* lbl, QPushButton* btn, bool ok);
 
     CameraView* m_camera   = nullptr;
     CommTest*   m_commTest = nullptr;
@@ -36,4 +42,14 @@ private:
     QLabel* m_irdaRaw      = nullptr;
     QLabel* m_timeLabel    = nullptr;
     QStringList m_irdaBuf;
+
+    // Device test widgets
+    QPushButton* m_audioBtn  = nullptr;
+    QPushButton* m_usb1Btn   = nullptr;
+    QPushButton* m_usb2Btn   = nullptr;
+    QPushButton* m_sdBtn     = nullptr;
+    QLabel*      m_audioRes  = nullptr;
+    QLabel*      m_usb1Res   = nullptr;
+    QLabel*      m_usb2Res   = nullptr;
+    QLabel*      m_sdRes     = nullptr;
 };

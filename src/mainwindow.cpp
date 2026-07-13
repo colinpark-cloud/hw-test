@@ -3,9 +3,15 @@
 #include "commtest.h"
 
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QHBoxLayout>
+#include <QProcess>
+#include <QPushButton>
+#include <QStorageInfo>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -135,7 +141,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     camLayout->setContentsMargins(0, 0, 0, 0);
     m_camera = new CameraView(camFrame);
     camLayout->addWidget(m_camera);
-    leftCol->addWidget(camFrame, 65);
+    leftCol->addWidget(camFrame, 55);
 
     /* sensor panels — bigger, more visible */
     auto *sensorRow = new QHBoxLayout;
@@ -174,7 +180,51 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     sensorRow->addWidget(makeSensor("근접센서 (PS)", "VCNL4200 raw", &m_proxVal, &m_proxRaw), 1);
     sensorRow->addWidget(makeSensor("조도센서 (ALS)", "lux", &m_alsVal, &m_alsRaw), 1);
     sensorRow->addWidget(makeSensor("IrDA (/dev/ttyACM1)", "수신 데이터", &m_irdaVal, &m_irdaRaw), 1);
-    leftCol->addLayout(sensorRow, 35);
+    leftCol->addLayout(sensorRow, 25);
+
+    /* ── device test row: Audio / USB1 / USB2 / SD Card ── */
+    const QString devBtnStyle =
+        "QPushButton{font-size:11px;font-weight:700;background:#17304c;color:white;"
+        "border-radius:6px;padding:4px 2px;}"
+        "QPushButton:pressed{background:#0f2035;}";
+    const QString devResStyle =
+        "font-size:11px;font-weight:700;color:#6b7a8d;"
+        "background:#f0f4f8;border:1px solid #d1d9e0;border-radius:5px;";
+
+    auto makeDevCard = [&](const QString& label, QPushButton** btnOut, QLabel** resOut) -> QWidget* {
+        auto *card = new QWidget;
+        card->setStyleSheet("QWidget{background:#f0f4f8;border-radius:8px;}"
+                            "QLabel{background:transparent;border:none;}");
+        card->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        auto *vl = new QVBoxLayout(card);
+        vl->setContentsMargins(4, 4, 4, 4);
+        vl->setSpacing(3);
+        auto *btn = new QPushButton(label);
+        btn->setMinimumHeight(28);
+        btn->setStyleSheet(devBtnStyle);
+        auto *res = new QLabel("---");
+        res->setAlignment(Qt::AlignCenter);
+        res->setFixedHeight(20);
+        res->setStyleSheet(devResStyle);
+        vl->addWidget(btn);
+        vl->addWidget(res);
+        if (btnOut) *btnOut = btn;
+        if (resOut) *resOut = res;
+        return card;
+    };
+
+    auto *devRow = new QHBoxLayout;
+    devRow->setSpacing(5);
+    devRow->addWidget(makeDevCard("🔊 오디오",  &m_audioBtn, &m_audioRes), 1);
+    devRow->addWidget(makeDevCard("USB1",        &m_usb1Btn,  &m_usb1Res),  1);
+    devRow->addWidget(makeDevCard("USB2",        &m_usb2Btn,  &m_usb2Res),  1);
+    devRow->addWidget(makeDevCard("SD카드",      &m_sdBtn,    &m_sdRes),    1);
+    leftCol->addLayout(devRow, 10);
+
+    connect(m_audioBtn, &QPushButton::clicked, this, &MainWindow::testAudio);
+    connect(m_usb1Btn,  &QPushButton::clicked, this, [this]{ testUsb(0); });
+    connect(m_usb2Btn,  &QPushButton::clicked, this, [this]{ testUsb(1); });
+    connect(m_sdBtn,    &QPushButton::clicked, this, &MainWindow::testSd);
 
     contentRow->addLayout(leftCol, 35);
 
@@ -309,4 +359,105 @@ void MainWindow::updateStatus() {
         m_alsRaw->setText("센서 없음");
         m_alsRaw->setStyleSheet("font-size:11px;color:#f87171;");
     }
+}
+
+/* ── device test helpers ─────────────────────────────────── */
+
+void MainWindow::setDevResult(QLabel* lbl, QPushButton* btn, bool ok) {
+    lbl->setText(ok ? "PASS" : "FAIL");
+    lbl->setStyleSheet(ok
+        ? "font-size:11px;font-weight:700;color:#0f3d27;background:#cdebd9;"
+          "border:1px solid #8bc59e;border-radius:5px;"
+        : "font-size:11px;font-weight:700;color:#842029;background:#f8d7da;"
+          "border:1px solid #f1aeb5;border-radius:5px;");
+    Q_UNUSED(btn)
+}
+
+bool MainWindow::runStorageRW(const QString& devNode, const QString& label) {
+    // Find mount point for the device
+    QString root;
+    const auto mounts = QStorageInfo::mountedVolumes();
+    for (const auto& m : mounts) {
+        if (!m.isValid() || !m.isReady()) continue;
+        const QString dev = QString::fromLocal8Bit(m.device());
+        if (dev.contains(devNode, Qt::CaseInsensitive) ||
+            m.rootPath().contains(devNode, Qt::CaseInsensitive)) {
+            root = m.rootPath();
+            break;
+        }
+    }
+    if (root.isEmpty()) return false;
+
+    const QString path = QDir(root).filePath(QString("hwtest_%1.bin").arg(label));
+    QByteArray data(64 * 1024, '\xA5');
+    { QFile f(path);
+      if (!f.open(QIODevice::WriteOnly)) return false;
+      f.write(data); }
+
+    QByteArray readBack;
+    { QFile f(path);
+      if (!f.open(QIODevice::ReadOnly)) return false;
+      readBack = f.readAll(); }
+    QFile::remove(path);
+
+    auto wHash = QCryptographicHash::hash(data,    QCryptographicHash::Sha256);
+    auto rHash = QCryptographicHash::hash(readBack, QCryptographicHash::Sha256);
+    return wHash == rHash;
+}
+
+void MainWindow::testAudio() {
+    m_audioRes->setText("...");
+    m_audioRes->setStyleSheet("font-size:11px;color:#6b7a8d;background:#f0f4f8;"
+                              "border:1px solid #d1d9e0;border-radius:5px;");
+#ifdef Q_OS_WIN
+    setDevResult(m_audioRes, m_audioBtn, false);
+#else
+    // Try speaker-test (1 sec, 1kHz sine on default device)
+    auto *p = new QProcess(this);
+    connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, p](int code, QProcess::ExitStatus) {
+        setDevResult(m_audioRes, m_audioBtn, code == 0);
+        p->deleteLater();
+    });
+    p->start("sh", {"-c", "speaker-test -t sine -f 1000 -l 1 -D default 2>/dev/null"});
+#endif
+}
+
+void MainWindow::testUsb(int idx) {
+    QLabel*      res = idx == 0 ? m_usb1Res : m_usb2Res;
+    QPushButton* btn = idx == 0 ? m_usb1Btn : m_usb2Btn;
+    res->setText("...");
+    res->setStyleSheet("font-size:11px;color:#6b7a8d;background:#f0f4f8;"
+                       "border:1px solid #d1d9e0;border-radius:5px;");
+#ifdef Q_OS_WIN
+    setDevResult(res, btn, false);
+#else
+    const QString dev = idx == 0 ? "sda" : "sdb";
+    // Run in background thread to avoid blocking UI
+    auto *p = new QProcess(this);
+    connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, res, btn, dev, p](int, QProcess::ExitStatus) {
+        setDevResult(res, btn, runStorageRW(dev, dev));
+        p->deleteLater();
+    });
+    // Just a quick presence check before RW test — kick off async
+    p->start("sh", {"-c", QString("ls /dev/%1 2>/dev/null").arg(dev)});
+#endif
+}
+
+void MainWindow::testSd() {
+    m_sdRes->setText("...");
+    m_sdRes->setStyleSheet("font-size:11px;color:#6b7a8d;background:#f0f4f8;"
+                           "border:1px solid #d1d9e0;border-radius:5px;");
+#ifdef Q_OS_WIN
+    setDevResult(m_sdRes, m_sdBtn, false);
+#else
+    auto *p = new QProcess(this);
+    connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, p](int, QProcess::ExitStatus) {
+        setDevResult(m_sdRes, m_sdBtn, runStorageRW("mmcblk1", "sd"));
+        p->deleteLater();
+    });
+    p->start("sh", {"-c", "ls /dev/mmcblk1 2>/dev/null"});
+#endif
 }
