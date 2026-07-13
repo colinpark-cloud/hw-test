@@ -22,6 +22,7 @@ private slots:
     void testUsb(int idx);   // 0=USB1(/dev/sda) 1=USB2(/dev/sdb)
     void testSd();
     void testEmmc();
+    void testExp();   // USB-to-eMMC on 1-1.1.3
 
 private:
     QWidget* makePanel(const QString& title, QLabel** valueOut);
@@ -50,9 +51,11 @@ private:
     QPushButton* m_usb2Btn   = nullptr;
     QPushButton* m_sdBtn     = nullptr;
     QPushButton* m_emmcBtn   = nullptr;
+    QPushButton* m_expBtn    = nullptr;
     QLabel*      m_audioRes  = nullptr;
     QLabel*      m_usb1Res   = nullptr;
     QLabel*      m_usb2Res   = nullptr;
     QLabel*      m_sdRes     = nullptr;
     QLabel*      m_emmcRes   = nullptr;
+    QLabel*      m_expRes    = nullptr;
 };

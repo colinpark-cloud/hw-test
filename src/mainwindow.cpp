@@ -221,6 +221,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     devRow->addWidget(makeDevCard("USB2",        &m_usb2Btn,  &m_usb2Res),  1);
     devRow->addWidget(makeDevCard("SD카드",      &m_sdBtn,    &m_sdRes),    1);
     devRow->addWidget(makeDevCard("eMMC",        &m_emmcBtn,  &m_emmcRes),  1);
+    devRow->addWidget(makeDevCard("EXP",         &m_expBtn,   &m_expRes),   1);
     leftCol->addLayout(devRow, 10);
 
     connect(m_audioBtn, &QPushButton::clicked, this, &MainWindow::testAudio);
@@ -228,6 +229,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_usb2Btn,  &QPushButton::clicked, this, [this]{ testUsb(1); });
     connect(m_sdBtn,    &QPushButton::clicked, this, &MainWindow::testSd);
     connect(m_emmcBtn,  &QPushButton::clicked, this, &MainWindow::testEmmc);
+    connect(m_expBtn,   &QPushButton::clicked, this, &MainWindow::testExp);
 
     contentRow->addLayout(leftCol, 35);
 
@@ -451,21 +453,33 @@ void MainWindow::testUsb(int idx) {
 #ifdef Q_OS_WIN
     setDevResult(res, btn, false);
 #else
-    const QString dev = idx == 0 ? "sda" : "sdb";
-    // Check presence first, show "없음" if not connected
+    const QString usbPath = idx == 0 ? "1-1.3" : "1-1.4";
+    // Find block device from USB port → check /proc/mounts → write/read test
+    const QString cmd = QString(
+        "P=$(readlink -f /sys/bus/usb/devices/%1 2>/dev/null);"
+        "DEV=$(ls \"$P\"/*/host*/target*/*/block/ 2>/dev/null | head -n 1);"
+        "[ -z \"$DEV\" ] && exit 2;"
+        "MOUNT=$(awk -v d=\"/dev/$DEV\" '$1==d||$1==d\"1\"{print $2;exit}' /proc/mounts 2>/dev/null);"
+        "[ -z \"$MOUNT\" ] && exit 3;"
+        "DATA=\"HWTEST_$(date +%%s)\";"
+        "echo \"$DATA\" > \"$MOUNT/hwtest_tmp.bin\" && sync;"
+        "READ=$(cat \"$MOUNT/hwtest_tmp.bin\" 2>/dev/null);"
+        "rm -f \"$MOUNT/hwtest_tmp.bin\";"
+        "[ \"$DATA\" = \"$READ\" ] && exit 0 || exit 1"
+    ).arg(usbPath);
     auto *p = new QProcess(this);
     connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, res, btn, dev, p](int code, QProcess::ExitStatus) {
+            this, [this, res, btn, p](int code, QProcess::ExitStatus) {
         p->deleteLater();
-        if (code != 0) {
+        if (code == 2) {
             res->setText("없음");
             res->setStyleSheet("font-size:11px;font-weight:700;color:#6b7280;"
                                "background:#f3f4f6;border:1px solid #d1d5db;border-radius:5px;");
-            return;
+        } else {
+            setDevResult(res, btn, code == 0);
         }
-        setDevResult(res, btn, runStorageRW(dev, dev));
     });
-    p->start("sh", {"-c", QString("ls /dev/%1 2>/dev/null").arg(dev)});
+    p->start("sh", {"-c", cmd});
 #endif
 }
 
@@ -483,6 +497,43 @@ void MainWindow::testSd() {
         p->deleteLater();
     });
     p->start("sh", {"-c", "ls /dev/mmcblk1 2>/dev/null"});
+#endif
+}
+
+void MainWindow::testExp() {
+    m_expRes->setText("...");
+    m_expRes->setStyleSheet("font-size:11px;color:#6b7a8d;background:#f0f4f8;"
+                            "border:1px solid #d1d9e0;border-radius:5px;");
+#ifdef Q_OS_WIN
+    setDevResult(m_expRes, m_expBtn, false);
+#else
+    // USB-to-eMMC adapter on port 1-1.1.3.1 — raw device, no filesystem; use direct dd RW test
+    const QString cmd =
+        "P=$(readlink -f /sys/bus/usb/devices/1-1.1.3.1 2>/dev/null);"
+        "DEV=$(ls \"$P\"/*/host*/target*/*/block/ 2>/dev/null | head -n 1);"
+        "[ -z \"$DEV\" ] && exit 2;"
+        "SECTORS=$(cat /sys/block/$DEV/size 2>/dev/null);"
+        "[ -z \"$SECTORS\" ] || [ \"$SECTORS\" -lt 16 ] && exit 1;"
+        "OFFSET=$(( SECTORS - 8 ));"
+        "dd if=/dev/urandom bs=4096 count=1 of=/tmp/hwtest_exp_ref.bin 2>/dev/null;"
+        "dd if=/tmp/hwtest_exp_ref.bin bs=512 count=8 of=/dev/$DEV seek=$OFFSET 2>/dev/null && sync;"
+        "dd if=/dev/$DEV bs=512 count=8 skip=$OFFSET of=/tmp/hwtest_exp_rd.bin 2>/dev/null;"
+        "cmp /tmp/hwtest_exp_ref.bin /tmp/hwtest_exp_rd.bin; RET=$?;"
+        "rm -f /tmp/hwtest_exp_ref.bin /tmp/hwtest_exp_rd.bin;"
+        "exit $RET";
+    auto *p = new QProcess(this);
+    connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, p](int code, QProcess::ExitStatus) {
+        p->deleteLater();
+        if (code == 2) {
+            m_expRes->setText("없음");
+            m_expRes->setStyleSheet("font-size:11px;font-weight:700;color:#6b7280;"
+                                    "background:#f3f4f6;border:1px solid #d1d5db;border-radius:5px;");
+        } else {
+            setDevResult(m_expRes, m_expBtn, code == 0);
+        }
+    });
+    p->start("sh", {"-c", cmd});
 #endif
 }
 
