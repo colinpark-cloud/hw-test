@@ -2,9 +2,11 @@
 
 #include <QWidget>
 
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QSpinBox;
 class QTimer;
 
 class CommTest : public QWidget {
@@ -36,6 +38,7 @@ private:
         QPushButton* flowButtons[2] = {};   // COM1 flow control (없음 / 흐름제어)
         QPushButton* ipButtons[4]   = {};   // LAN IP select
         QLineEdit* deviceEdit   = nullptr;
+        QComboBox* deviceCombo  = nullptr;  // Windows only: COM port selector
         QLabel*    detailLabel = nullptr;
         QLabel*    totalLabel  = nullptr;
         QLabel*    passLabel   = nullptr;
@@ -48,13 +51,17 @@ private:
     void buildUi();
     void resetCounters();
     void updateRow(TargetRow& row);
+    void showTimePicker();
+    void syncNtp();
+    void syncTimeFromServer();
+    bool eventFilter(QObject* obj, QEvent* event) override;
     bool checkComPort(const QString& device) const;
     bool checkLanLink(const QString& ip) const;
     bool checkLanAnyLink(const QStringList& ips, const QString& skipIp = {}) const;
 #ifndef Q_OS_WIN
     bool checkSerialRoundTrip(const QString& device) const;
 #endif
-    bool checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl = 0) const;
+    bool checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl = 0, int comType = 0) const;
 #ifdef Q_OS_WIN
     bool checkSerialRx(void* h) const;
 #else
@@ -69,6 +76,8 @@ private:
 
     QVector<TargetRow> m_rows;
     QLabel*      m_clockLabel   = nullptr;
+    QWidget*     m_timePickerOverlay = nullptr;
+    QSpinBox*    m_timeSpins[6] = {};
     QPushButton* m_runBtn       = nullptr;
     QPushButton* m_masterTxBtn  = nullptr;
     QPushButton* m_masterRxBtn  = nullptr;

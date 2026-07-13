@@ -1,7 +1,13 @@
 #include "commtest.h"
 
+#include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDateTimeEdit>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QEvent>
+#include <QMouseEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QGridLayout>
@@ -11,6 +17,8 @@
 #include <QMetaObject>
 #include <QProcess>
 #include <QPushButton>
+#include <QSlider>
+#include <QSpinBox>
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -26,7 +34,9 @@
 #  include <netinet/in.h>
 #  include <sys/socket.h>
 #  include <sys/wait.h>
+#  include <sys/ioctl.h>
 #  include <termios.h>
+#  include <linux/serial.h>
 #  include <unistd.h>
 #endif
 #include <cstring>
@@ -120,12 +130,39 @@ void CommTest::buildUi() {
     layout->setContentsMargins(12, 0, 12, 4);
     layout->setSpacing(1);
 
-    /* clock */
+    /* clock row: label + NTP button */
+    auto *clockRow = new QWidget;
+    auto *clockRowLayout = new QHBoxLayout(clockRow);
+    clockRowLayout->setContentsMargins(0, 0, 0, 0);
+    clockRowLayout->setSpacing(6);
+
     m_clockLabel = new QLabel;
     m_clockLabel->setFixedHeight(32);
     m_clockLabel->setStyleSheet("QLabel{font-size:14px;font-weight:800;color:#1f2937;"
-        "background:#ffffff;border:1px solid #cdd6e1;border-radius:10px;padding:1px 10px;}");
-    layout->addWidget(m_clockLabel);
+        "background:#ffffff;border:1px solid #cdd6e1;border-radius:10px;padding:1px 10px;}"
+        "QLabel:hover{background:#f0f4ff;border-color:#93c5fd;}");
+    m_clockLabel->setCursor(Qt::PointingHandCursor);
+    m_clockLabel->installEventFilter(this);
+    clockRowLayout->addWidget(m_clockLabel, 1);
+
+    const QString syncBtnStyle =
+        "QPushButton{font-size:11px;font-weight:700;background:#dbeafe;"
+        "color:#1e40af;border:1px solid #93c5fd;border-radius:8px;padding:0 10px;}"
+        "QPushButton:pressed{background:#bfdbfe;}";
+
+    auto *ntpBtn = new QPushButton("NTP 동기화");
+    ntpBtn->setFixedHeight(32);
+    ntpBtn->setStyleSheet(syncBtnStyle);
+    connect(ntpBtn, &QPushButton::clicked, this, &CommTest::syncNtp);
+    clockRowLayout->addWidget(ntpBtn);
+
+    auto *sshBtn = new QPushButton("서버 동기화");
+    sshBtn->setFixedHeight(32);
+    sshBtn->setStyleSheet(syncBtnStyle);
+    connect(sshBtn, &QPushButton::clicked, this, &CommTest::syncTimeFromServer);
+    clockRowLayout->addWidget(sshBtn);
+
+    layout->addWidget(clockRow);
     updateClock();
 
     /* master TX/RX control for all COM ports */
@@ -144,7 +181,7 @@ void CommTest::buildUi() {
         b->setFixedHeight(24);
         b->setFixedWidth(76);
     }
-    const bool defTx = QCoreApplication::arguments().contains("--tx-default");
+    const bool defTx = false; // always RX by default
     m_masterTxBtn->setStyleSheet(txrxButtonStyle(defTx,  true));
     m_masterRxBtn->setStyleSheet(txrxButtonStyle(!defTx, false));
     connect(m_masterTxBtn, &QPushButton::clicked, this, [this]() {
@@ -220,13 +257,15 @@ void CommTest::buildUi() {
     m_boardMode = QCoreApplication::arguments().contains("--pc") ? 1 : 0;
 #endif
     const bool pcMode = (m_boardMode != 0);
-    const int defaultTxRx = QCoreApplication::arguments().contains("--tx-default") ? 0 : 1;
+    const int defaultTxRx = 1; // always RX
     {
-        TargetRow r; r.kind=TargetKind::Com1; r.title="COM1";
+        TargetRow r; r.kind=TargetKind::Com1;
 #ifdef Q_OS_WIN
-        const QString d = "COM1";
+        r.title = "COM3";
+        const QString d = "COM3";
 #else
-        const QString d = pcMode ? "/dev/ttyUSB0" : "/dev/ttyACM0";
+        r.title = "COM1";
+        const QString d = pcMode ? "/dev/ttyUSB0" : "/dev/ttymxc3";
 #endif
         r.detail=d; r.device=d; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
@@ -240,13 +279,15 @@ void CommTest::buildUi() {
         r.detail=d; r.device=d; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
     {
-        TargetRow r; r.kind=TargetKind::Com3; r.title="COM3";
+        TargetRow r; r.kind=TargetKind::Com3;
 #ifdef Q_OS_WIN
-        const QString d = "COM3";
-        r.detail = "RS485  COM3";
+        r.title = "COM1";
+        const QString d = "COM1";
+        r.detail = "RS485  COM1";
 #else
-        const QString d = pcMode ? "/dev/ttyUSB2" : "/dev/ttymxc3";
-        r.detail = (pcMode ? "RS485  /dev/ttyUSB2" : "RS485  /dev/ttymxc3");
+        r.title = "COM3";
+        const QString d = pcMode ? "/dev/ttyUSB2" : "/dev/ttyACM0";
+        r.detail = (pcMode ? "RS485  /dev/ttyUSB2" : "RS485  /dev/ttyACM0");
 #endif
         r.device=d; r.comType=1; r.txrxMode=defaultTxRx; m_rows.append(r);
     }
@@ -313,7 +354,31 @@ void CommTest::buildUi() {
                     if (i < m_rows.size()) m_rows[i].device = text;
                 });
 
+#ifdef Q_OS_WIN
+            // Windows: replace plain edit with combo listing COM1-COM5
+            row.deviceEdit->hide();
+            row.deviceCombo = new QComboBox;
+            row.deviceCombo->setFixedHeight(24);
+            row.deviceCombo->setStyleSheet(
+                "QComboBox{font-size:11px;color:#374151;background:#f9fafb;"
+                "border:1px solid #d1d5db;border-radius:6px;padding:1px 6px;}"
+                "QComboBox::drop-down{border:none;width:18px;}"
+                "QComboBox QAbstractItemView{font-size:11px;}");
+            for (int p = 1; p <= 5; ++p)
+                row.deviceCombo->addItem(QString("COM%1").arg(p));
+            { int idx = row.deviceCombo->findText(row.device);
+              row.deviceCombo->setCurrentIndex(idx >= 0 ? idx : 0); }
+            connect(row.deviceCombo, &QComboBox::currentTextChanged, this,
+                [this, i](const QString& text) {
+                    if (i < m_rows.size()) {
+                        m_rows[i].device = text;
+                        if (m_rows[i].deviceEdit) m_rows[i].deviceEdit->setText(text);
+                    }
+                });
+            devLayout->addWidget(row.deviceCombo, 1);
+#else
             devLayout->addWidget(row.deviceEdit, 1);
+#endif
             leftLayout->addWidget(devRow);
         }
 
@@ -460,14 +525,63 @@ void CommTest::buildUi() {
         grid->addWidget(rowWidget, i + 1, 0, 1, 4);
     }
 
-    /* run button */
+    /* run button + brightness in bottom row */
     auto *bottom = new QHBoxLayout;
-    bottom->setContentsMargins(0, 0, 0, 0);
+    bottom->setContentsMargins(0, 2, 0, 0);
+    bottom->setSpacing(10);
     m_runBtn = new QPushButton("off");
     m_runBtn->setFixedHeight(56);
     m_runBtn->setMinimumWidth(140);
     m_runBtn->setStyleSheet(runStyle(false));
+
+#ifndef Q_OS_WIN
+    /* brightness: ☀ 밝기 [====slider====] 255 — centered in the empty space */
+    auto *brightWidget = new QWidget;
+    brightWidget->setStyleSheet("QWidget{background:#f1f5f9;border:1px solid #c9d3df;border-radius:10px;}"
+                                "QLabel{background:transparent;border:none;}");
+    auto *bl = new QHBoxLayout(brightWidget);
+    bl->setContentsMargins(12, 6, 12, 6);
+    bl->setSpacing(8);
+
+    auto *bIcon = new QLabel("☀");
+    bIcon->setStyleSheet("font-size:18px;color:#f59e0b;");
+    bl->addWidget(bIcon);
+
+    auto *bLbl = new QLabel("밝기");
+    bLbl->setStyleSheet("font-size:13px;font-weight:700;color:#374151;");
+    bl->addWidget(bLbl);
+
+    auto *bSlider = new QSlider(Qt::Horizontal);
+    bSlider->setRange(20, 255);
+    int curBright = 150;
+    { QFile f("/sys/class/backlight/backlight-lvds/brightness");
+      if (f.open(QIODevice::ReadOnly))
+          curBright = f.readAll().trimmed().toInt(); }
+    bSlider->setValue(curBright);
+    bSlider->setStyleSheet(
+        "QSlider::groove:horizontal{height:8px;background:#d1d5db;border-radius:4px;}"
+        "QSlider::handle:horizontal{width:28px;height:28px;margin:-10px 0;background:#3b82f6;"
+        "border-radius:14px;border:2px solid #fff;}"
+        "QSlider::sub-page:horizontal{background:#3b82f6;border-radius:4px;}");
+    bl->addWidget(bSlider, 1);
+
+    auto *bVal = new QLabel(QString::number(curBright));
+    bVal->setFixedWidth(30);
+    bVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    bVal->setStyleSheet("font-size:13px;font-weight:700;color:#374151;");
+    bl->addWidget(bVal);
+
+    connect(bSlider, &QSlider::valueChanged, this, [bVal](int v) {
+        bVal->setText(QString::number(v));
+        QFile f("/sys/class/backlight/backlight-lvds/brightness");
+        if (f.open(QIODevice::WriteOnly))
+            f.write(QByteArray::number(v));
+    });
+
+    bottom->addWidget(brightWidget, 1);
+#else
     bottom->addStretch(1);
+#endif
     bottom->addWidget(m_runBtn);
 
     layout->addLayout(grid);
@@ -669,7 +783,7 @@ static HANDLE openSerial(const QString& device, int flowCtrl) {
     return h;
 }
 
-bool CommTest::checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl) const {
+bool CommTest::checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl, int /*comType*/) const {
     HANDLE h = openSerial(device, flowCtrl);
     if (h == INVALID_HANDLE_VALUE) return false;
     DWORD written = 0;
@@ -718,7 +832,7 @@ static speed_t toBaudConst(int baud) {
     }
 }
 
-static int openSerial(const QString& device, int flowCtrl, int baudRate = 9600) {
+static int openSerial(const QString& device, int flowCtrl, int baudRate = 9600, int comType = 0) {
     int fd = ::open(device.toStdString().c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) return -1;
     struct termios tio{};
@@ -730,11 +844,16 @@ static int openSerial(const QString& device, int flowCtrl, int baudRate = 9600) 
     else if (flowCtrl == 2) tio.c_iflag |= (IXON | IXOFF);
     tcflush(fd, TCIOFLUSH);
     tcsetattr(fd, TCSANOW, &tio);
+    if (comType == 1) {
+        struct serial_rs485 rs485{};
+        rs485.flags = SER_RS485_ENABLED | SER_RS485_RTS_ON_SEND;
+        ioctl(fd, TIOCSRS485, &rs485);
+    }
     return fd;
 }
 
-bool CommTest::checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl) const {
-    int fd = openSerial(device, flowCtrl, 9600);
+bool CommTest::checkSerialTx(const QString& device, const QByteArray& payload, int flowCtrl, int comType) const {
+    int fd = openSerial(device, flowCtrl, 9600, comType);
     if (fd < 0) return false;
     bool ok = (::write(fd, payload.constData(), payload.size()) == payload.size());
     ::close(fd);
@@ -759,7 +878,7 @@ void CommTest::openComFds() {
         // TX mode: open/close per-tick — only keep RX ports open
         if (i < m_rows.size() && m_rows[i].txrxMode == 1) {
             const auto &r = m_rows[i];
-            m_comFds[i] = openSerial(r.device, r.flowCtrl, 9600);
+            m_comFds[i] = openSerial(r.device, r.flowCtrl, 9600, r.comType);
         }
     }
 }
@@ -794,7 +913,7 @@ void CommTest::onTick() {
     /* snapshot row data needed by background thread */
     struct RowSnap {
         int idx; bool isLan;
-        QString device, ip; int txrxMode, flowCtrl;
+        QString device, ip; int txrxMode, flowCtrl, comType;
         QByteArray payload; QStringList peers;
 #ifdef Q_OS_WIN
         void* persistFd = (void*)(intptr_t)-1;
@@ -814,10 +933,10 @@ void CommTest::onTick() {
 #else
         int pfd = (r.txrxMode == 1) ? m_comFds[i] : -1;
 #endif
-        snaps.append({i, false, r.device, {}, r.txrxMode, r.flowCtrl, payloads[i], {}, pfd});
+        snaps.append({i, false, r.device, {}, r.txrxMode, r.flowCtrl, r.comType, payloads[i], {}, pfd});
     }
-    snaps.append({3, true, {}, m_rows[3].ip, 0, 0, {}, lan1Peers});
-    snaps.append({4, true, {}, m_rows[4].ip, 0, 0, {}, lan2Peers});
+    snaps.append({3, true, {}, m_rows[3].ip, 0, 0, 0, {}, lan1Peers});
+    snaps.append({4, true, {}, m_rows[4].ip, 0, 0, 0, {}, lan2Peers});
 
     /* run all row checks in parallel, then update all counts at once */
     const int n = snaps.size();
@@ -831,7 +950,7 @@ void CommTest::onTick() {
                 ok = checkLanAnyLink(s.peers, s.ip);
             } else if (s.txrxMode == 0) {
                 // TX: open exclusively per-tick (no persistent fd)
-                ok = checkSerialTx(s.device, s.payload + "\n", s.flowCtrl);
+                ok = checkSerialTx(s.device, s.payload + "\n", s.flowCtrl, s.comType);
             } else {
                 // RX: use persistent fd opened at Run time
                 ok = checkSerialRx(s.persistFd);
@@ -873,6 +992,160 @@ void CommTest::updateClock() {
         .arg(now.time().second(), 2,10,QChar('0')));
 }
 
+bool CommTest::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == m_clockLabel && event->type() == QEvent::MouseButtonRelease) {
+        showTimePicker();
+        return true;
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+void CommTest::syncNtp() {
+#ifndef Q_OS_WIN
+    QProcess::execute("sh", {"-c", "chronyc makestep 2>/dev/null || true"});
+    QProcess::execute("sh", {"-c", "hwclock -w 2>/dev/null || true"});
+    updateClock();
+#endif
+}
+
+void CommTest::syncTimeFromServer() {
+#ifndef Q_OS_WIN
+    QProcess p;
+    p.start("sh", {"-c",
+        "T=$(curl -s --max-time 3 http://192.168.1.103:8888/time 2>/dev/null);"
+        "[ -n \"$T\" ] && date -s \"$T\" && hwclock -w"});
+    p.waitForFinished(6000);
+    updateClock();
+#endif
+}
+
+void CommTest::showTimePicker() {
+    // Use inline overlay widget instead of QDialog (Weston kiosk forces dialogs fullscreen)
+    if (m_timePickerOverlay) {
+        m_timePickerOverlay->setVisible(!m_timePickerOverlay->isVisible());
+        if (m_timePickerOverlay->isVisible()) {
+            // Refresh spinbox values to current time
+            QDateTime now = QDateTime::currentDateTime();
+            const int vals[6] = {
+                now.date().year(), now.date().month(), now.date().day(),
+                now.time().hour(), now.time().minute(), now.time().second()
+            };
+            for (int i = 0; i < 6; ++i)
+                if (m_timeSpins[i]) m_timeSpins[i]->setValue(vals[i]);
+            m_timePickerOverlay->raise();
+        }
+        return;
+    }
+
+    // Build overlay once
+    m_timePickerOverlay = new QWidget(this, Qt::Widget);
+    m_timePickerOverlay->setAttribute(Qt::WA_StyledBackground, true);
+    m_timePickerOverlay->setStyleSheet(
+        "QWidget#timePicker{background:#fff;border:2px solid #3b82f6;border-radius:10px;}"
+        "QLabel{background:transparent;border:none;}");
+    m_timePickerOverlay->setObjectName("timePicker");
+
+    auto *ol = new QVBoxLayout(m_timePickerOverlay);
+    ol->setSpacing(4);
+    ol->setContentsMargins(8, 8, 8, 8);
+
+    QDateTime now = QDateTime::currentDateTime();
+    const int initVals[6] = {
+        now.date().year(), now.date().month(), now.date().day(),
+        now.time().hour(), now.time().minute(), now.time().second()
+    };
+    const int mins[6] = {2020, 1, 1, 0, 0, 0};
+    const int maxs[6] = {2099, 12, 31, 23, 59, 59};
+    const char *lbls[6] = {"년", "월", "일", "시", "분", "초"};
+
+    const QString upStyle  = "QPushButton{font-size:10px;background:#f1f5f9;border:1px solid #d1d5db;"
+                             "border-radius:3px;}QPushButton:pressed{background:#dbeafe;}";
+    const QString spinStyle= "QSpinBox{font-size:13px;font-weight:700;border:1px solid #3b82f6;"
+                             "border-radius:3px;color:#1f2937;background:#fff;}";
+
+    auto makeCol = [&](int i) -> QWidget* {
+        auto *col = new QWidget;
+        auto *colL = new QVBoxLayout(col);
+        colL->setSpacing(2); colL->setContentsMargins(0,0,0,0);
+
+        auto *up = new QPushButton("▲");
+        up->setFixedSize(36, 20); up->setStyleSheet(upStyle);
+
+        m_timeSpins[i] = new QSpinBox;
+        m_timeSpins[i]->setRange(mins[i], maxs[i]);
+        m_timeSpins[i]->setValue(initVals[i]);
+        m_timeSpins[i]->setFixedSize(36, 26);
+        m_timeSpins[i]->setAlignment(Qt::AlignCenter);
+        m_timeSpins[i]->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        m_timeSpins[i]->setStyleSheet(spinStyle);
+
+        auto *dn = new QPushButton("▼");
+        dn->setFixedSize(36, 20); dn->setStyleSheet(upStyle);
+
+        auto *lbl = new QLabel(lbls[i]);
+        lbl->setAlignment(Qt::AlignCenter);
+        lbl->setStyleSheet("font-size:9px;color:#6b7280;");
+
+        QSpinBox *sp = m_timeSpins[i];
+        connect(up, &QPushButton::clicked, sp, [sp]{ sp->stepUp(); });
+        connect(dn, &QPushButton::clicked, sp, [sp]{ sp->stepDown(); });
+
+        colL->addWidget(up); colL->addWidget(m_timeSpins[i]);
+        colL->addWidget(dn); colL->addWidget(lbl);
+        return col;
+    };
+
+    {
+        auto *r = new QWidget; auto *rl = new QHBoxLayout(r);
+        rl->setSpacing(3); rl->setContentsMargins(0,0,0,0);
+        for (int i = 0; i < 6; ++i) rl->addWidget(makeCol(i));
+        ol->addWidget(r);
+    }
+
+    const QString btnStyle = "QPushButton{font-size:11px;font-weight:600;padding:2px 10px;"
+                             "border-radius:4px;border:1px solid #d1d5db;background:#f8fafc;}"
+                             "QPushButton:pressed{background:#dbeafe;}";
+    auto *btnRow = new QWidget; auto *bl = new QHBoxLayout(btnRow);
+    bl->setSpacing(6); bl->setContentsMargins(0,0,0,0);
+    auto *applyBtn  = new QPushButton("적용");
+    auto *cancelBtn = new QPushButton("취소");
+    applyBtn->setFixedHeight(24); cancelBtn->setFixedHeight(24);
+    applyBtn->setStyleSheet(btnStyle); cancelBtn->setStyleSheet(btnStyle);
+    bl->addWidget(applyBtn); bl->addWidget(cancelBtn);
+    ol->addWidget(btnRow);
+
+    m_timePickerOverlay->adjustSize();
+
+    // Position below clock label
+    auto pos = m_clockLabel->mapTo(this, QPoint(0, m_clockLabel->height() + 2));
+    m_timePickerOverlay->move(pos);
+    m_timePickerOverlay->raise();
+    m_timePickerOverlay->show();
+
+    connect(cancelBtn, &QPushButton::clicked, m_timePickerOverlay, &QWidget::hide);
+    connect(applyBtn,  &QPushButton::clicked, this, [this]() {
+        m_timePickerOverlay->hide();
+#ifdef Q_OS_WIN
+        SYSTEMTIME st{};
+        st.wYear=(WORD)m_timeSpins[0]->value(); st.wMonth =(WORD)m_timeSpins[1]->value();
+        st.wDay =(WORD)m_timeSpins[2]->value(); st.wHour  =(WORD)m_timeSpins[3]->value();
+        st.wMinute=(WORD)m_timeSpins[4]->value();st.wSecond=(WORD)m_timeSpins[5]->value();
+        st.wMilliseconds=0; SetLocalTime(&st);
+#else
+        const QString cmd = QString("date -s \"%1-%2-%3 %4:%5:%6\"")
+            .arg(m_timeSpins[0]->value())
+            .arg(m_timeSpins[1]->value(),2,10,QChar('0'))
+            .arg(m_timeSpins[2]->value(),2,10,QChar('0'))
+            .arg(m_timeSpins[3]->value(),2,10,QChar('0'))
+            .arg(m_timeSpins[4]->value(),2,10,QChar('0'))
+            .arg(m_timeSpins[5]->value(),2,10,QChar('0'));
+        QProcess::execute("sh", {"-c", cmd});
+        QProcess::execute("sh", {"-c", "hwclock -w 2>/dev/null || true"});
+#endif
+        updateClock();
+    });
+}
+
 /* ── active state ───────────────────────────────────────── */
 void CommTest::setActive(bool active) {
     if (active) {
@@ -899,14 +1172,35 @@ void CommTest::toggleRun() {
 void CommTest::switchBoardMode(int mode) {
     m_boardMode = mode;
     static const QString devices[3][3] = {
-        {"/dev/ttyACM0",  "/dev/ttymxc2", "/dev/ttymxc3"}, // 0: iMX8MP
+        {"/dev/ttymxc3",  "/dev/ttymxc2", "/dev/ttyACM0"}, // 0: iMX8MP
         {"/dev/ttyUSB0", "/dev/ttyUSB1",  "/dev/ttyUSB2"}, // 1: Linux PC
-        {"COM1",         "COM2",          "COM3"},          // 2: Windows
+        {"COM3",         "COM2",          "COM1"},          // 2: Windows
+    };
+    static const QString details[3][3] = {
+        {"/dev/ttymxc3",        "/dev/ttymxc2",        "RS485  /dev/ttyACM0"}, // 0: iMX8MP
+        {"/dev/ttyUSB0",        "/dev/ttyUSB1",        "RS485  /dev/ttyUSB2"}, // 1: Linux PC
+        {"COM3",                "COM2",                "RS485  COM1"},          // 2: Windows
+    };
+    // Row titles: Windows mode shows Windows port numbers (COM3/COM2/COM1), others show physical (COM1/COM2/COM3)
+    static const QString titles[3][3] = {
+        {"COM1", "COM2", "COM3"},  // 0: iMX8MP
+        {"COM1", "COM2", "COM3"},  // 1: Linux PC
+        {"COM3", "COM2", "COM1"},  // 2: Windows
     };
     for (int i = 0; i < 3 && i < m_rows.size(); ++i) {
         m_rows[i].device = devices[mode][i];
+        m_rows[i].detail = details[mode][i];
+        m_rows[i].title  = titles[mode][i];
+        if (m_rows[i].titleLabel)
+            m_rows[i].titleLabel->setText(titles[mode][i]);
         if (m_rows[i].deviceEdit)
             m_rows[i].deviceEdit->setText(devices[mode][i]);
+        if (m_rows[i].deviceCombo) {
+            int idx = m_rows[i].deviceCombo->findText(devices[mode][i]);
+            m_rows[i].deviceCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        if (m_rows[i].detailLabel)
+            m_rows[i].detailLabel->setText(details[mode][i]);
     }
     for (int i = 0; i < 3; ++i) {
         if (!m_modeBtns[i]) continue;

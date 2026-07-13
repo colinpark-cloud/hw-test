@@ -146,17 +146,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         auto *w = new QWidget;
         w->setStyleSheet("QWidget{background:#f0f4f8;border-radius:10px;}"
                          "QLabel{background:transparent;border:none;}");
+        w->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         auto *vl = new QVBoxLayout(w);
-        vl->setContentsMargins(10, 6, 10, 6);
+        vl->setContentsMargins(6, 6, 6, 6);
         vl->setSpacing(2);
         auto *lbl = new QLabel(title);
         lbl->setStyleSheet("font-size:11px;font-weight:700;color:#455a74;");
+        lbl->setWordWrap(true);
         auto *big = new QLabel("---");
         big->setAlignment(Qt::AlignCenter);
         big->setWordWrap(true);
+        big->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         big->setStyleSheet("font-size:26px;font-weight:900;color:#17212f;");
         auto *raw = new QLabel(unit);
         raw->setAlignment(Qt::AlignCenter);
+        raw->setWordWrap(true);
+        raw->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         raw->setStyleSheet("font-size:11px;color:#6b7a8d;");
         vl->addWidget(lbl);
         vl->addWidget(big, 1);
@@ -207,6 +212,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     m_irdaTimer->start();
 
     initVCNL4200();
+#ifndef Q_OS_WIN
+    { QFile f("/sys/class/backlight/backlight-lvds/brightness");
+      if (f.open(QIODevice::WriteOnly)) f.write("255"); }
+    { QFile f("/sys/class/backlight/backlight-lvds/power/control");
+      if (f.open(QIODevice::WriteOnly)) f.write("on"); }
+#endif
     /* 600ms delay — sensor needs time after power-on before first measurement */
     QTimer::singleShot(600, this, &MainWindow::updateStatus);
 }
