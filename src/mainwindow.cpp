@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QCryptographicHash>
+#include <cmath>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -215,16 +216,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto *devRow = new QHBoxLayout;
     devRow->setSpacing(5);
-    devRow->addWidget(makeDevCard("🔊 오디오",  &m_audioBtn, &m_audioRes), 1);
+    devRow->addWidget(makeDevCard("오디오",     &m_audioBtn, &m_audioRes), 1);
     devRow->addWidget(makeDevCard("USB1",        &m_usb1Btn,  &m_usb1Res),  1);
     devRow->addWidget(makeDevCard("USB2",        &m_usb2Btn,  &m_usb2Res),  1);
     devRow->addWidget(makeDevCard("SD카드",      &m_sdBtn,    &m_sdRes),    1);
+    devRow->addWidget(makeDevCard("eMMC",        &m_emmcBtn,  &m_emmcRes),  1);
     leftCol->addLayout(devRow, 10);
 
     connect(m_audioBtn, &QPushButton::clicked, this, &MainWindow::testAudio);
     connect(m_usb1Btn,  &QPushButton::clicked, this, [this]{ testUsb(0); });
     connect(m_usb2Btn,  &QPushButton::clicked, this, [this]{ testUsb(1); });
     connect(m_sdBtn,    &QPushButton::clicked, this, &MainWindow::testSd);
+    connect(m_emmcBtn,  &QPushButton::clicked, this, &MainWindow::testEmmc);
 
     contentRow->addLayout(leftCol, 35);
 
@@ -267,6 +270,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       if (f.open(QIODevice::WriteOnly)) f.write("255"); }
     { QFile f("/sys/class/backlight/backlight-lvds/power/control");
       if (f.open(QIODevice::WriteOnly)) f.write("on"); }
+    QProcess::execute("sh", {"-c",
+        "amixer -c 1 sset 'Speaker' 100% on 2>/dev/null;"
+        "amixer -c 1 sset 'Headphone' 100% on 2>/dev/null"});
 #endif
     /* 600ms delay — sensor needs time after power-on before first measurement */
     QTimer::singleShot(600, this, &MainWindow::updateStatus);
@@ -412,14 +418,27 @@ void MainWindow::testAudio() {
 #ifdef Q_OS_WIN
     setDevResult(m_audioRes, m_audioBtn, false);
 #else
-    // Try speaker-test (1 sec, 1kHz sine on default device)
+    // Play left.wav (Left channel only) then right.wav (Right channel only)
+    static const QString kLeft  = "/usr/share/hw-test/left.wav";
+    static const QString kRight = "/usr/share/hw-test/right.wav";
+    if (!QFile::exists(kLeft) || !QFile::exists(kRight)) {
+        setDevResult(m_audioRes, m_audioBtn, false);
+        return;
+    }
     auto *p = new QProcess(this);
     connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, p](int code, QProcess::ExitStatus) {
-        setDevResult(m_audioRes, m_audioBtn, code == 0);
+            this, [this, p, kRight](int code, QProcess::ExitStatus) {
         p->deleteLater();
+        if (code != 0) { setDevResult(m_audioRes, m_audioBtn, false); return; }
+        auto *p2 = new QProcess(this);
+        connect(p2, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+                this, [this, p2](int c2, QProcess::ExitStatus) {
+            setDevResult(m_audioRes, m_audioBtn, c2 == 0);
+            p2->deleteLater();
+        });
+        p2->start("aplay", {"-D", "hw:1,0", kRight});
     });
-    p->start("sh", {"-c", "speaker-test -t sine -f 1000 -l 1 -D default 2>/dev/null"});
+    p->start("aplay", {"-D", "hw:1,0", kLeft});
 #endif
 }
 
@@ -433,14 +452,19 @@ void MainWindow::testUsb(int idx) {
     setDevResult(res, btn, false);
 #else
     const QString dev = idx == 0 ? "sda" : "sdb";
-    // Run in background thread to avoid blocking UI
+    // Check presence first, show "없음" if not connected
     auto *p = new QProcess(this);
     connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, res, btn, dev, p](int, QProcess::ExitStatus) {
-        setDevResult(res, btn, runStorageRW(dev, dev));
+            this, [this, res, btn, dev, p](int code, QProcess::ExitStatus) {
         p->deleteLater();
+        if (code != 0) {
+            res->setText("없음");
+            res->setStyleSheet("font-size:11px;font-weight:700;color:#6b7280;"
+                               "background:#f3f4f6;border:1px solid #d1d5db;border-radius:5px;");
+            return;
+        }
+        setDevResult(res, btn, runStorageRW(dev, dev));
     });
-    // Just a quick presence check before RW test — kick off async
     p->start("sh", {"-c", QString("ls /dev/%1 2>/dev/null").arg(dev)});
 #endif
 }
@@ -459,5 +483,33 @@ void MainWindow::testSd() {
         p->deleteLater();
     });
     p->start("sh", {"-c", "ls /dev/mmcblk1 2>/dev/null"});
+#endif
+}
+
+void MainWindow::testEmmc() {
+    m_emmcRes->setText("...");
+    m_emmcRes->setStyleSheet("font-size:11px;color:#6b7a8d;background:#f0f4f8;"
+                             "border:1px solid #d1d9e0;border-radius:5px;");
+#ifdef Q_OS_WIN
+    setDevResult(m_emmcRes, m_emmcBtn, false);
+#else
+    // Write/read test directly to /mnt/data (eMMC user data partition)
+    const QString path = "/mnt/data/hwtest_emmc.bin";
+    QByteArray data(64 * 1024, '\x5A');
+    bool ok = false;
+    {
+        QFile f(path);
+        if (f.open(QIODevice::WriteOnly)) { f.write(data); ok = true; }
+    }
+    if (ok) {
+        QByteArray readBack;
+        QFile f(path);
+        if (f.open(QIODevice::ReadOnly)) readBack = f.readAll();
+        QFile::remove(path);
+        auto wh = QCryptographicHash::hash(data,    QCryptographicHash::Sha256);
+        auto rh = QCryptographicHash::hash(readBack, QCryptographicHash::Sha256);
+        ok = (wh == rh);
+    }
+    setDevResult(m_emmcRes, m_emmcBtn, ok);
 #endif
 }
