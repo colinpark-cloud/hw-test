@@ -1002,8 +1002,13 @@ bool CommTest::eventFilter(QObject* obj, QEvent* event) {
 
 void CommTest::syncNtp() {
 #ifndef Q_OS_WIN
-    QProcess::execute("sh", {"-c", "chronyc makestep 2>/dev/null || true"});
-    QProcess::execute("sh", {"-c", "hwclock -w 2>/dev/null || true"});
+    // Try chronyc first; if no NTP source reachable, fall back to server time API
+    QProcess p;
+    p.start("sh", {"-c",
+        "chronyc makestep 2>/dev/null && chronyc waitsync 1 0 0 3 2>/dev/null && hwclock -w 2>/dev/null && exit 0;"
+        "T=$(curl -s --max-time 3 http://192.168.1.103:8888/time 2>/dev/null);"
+        "[ -n \"$T\" ] && date -s \"$T\" && hwclock -w 2>/dev/null"});
+    p.waitForFinished(8000);
     updateClock();
 #endif
 }
@@ -1012,9 +1017,9 @@ void CommTest::syncTimeFromServer() {
 #ifndef Q_OS_WIN
     QProcess p;
     p.start("sh", {"-c",
-        "T=$(curl -s --max-time 3 http://192.168.1.103:8888/time 2>/dev/null);"
-        "[ -n \"$T\" ] && date -s \"$T\" && hwclock -w"});
-    p.waitForFinished(6000);
+        "T=$(curl -s --max-time 5 http://192.168.1.103:8888/time 2>/dev/null);"
+        "[ -n \"$T\" ] && date -s \"$T\" && hwclock -w 2>/dev/null"});
+    p.waitForFinished(8000);
     updateClock();
 #endif
 }
