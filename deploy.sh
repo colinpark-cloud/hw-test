@@ -24,9 +24,10 @@ echo "연결됨"
 
 # 파일 배포
 echo "파일 배포 중..."
-ssh -o StrictHostKeyChecking=no root@"$BOARD_IP" 'rm -f /mnt/data/home/user/hw-test'
+ssh -o StrictHostKeyChecking=no root@"$BOARD_IP" 'rm -f /mnt/data/home/user/hw-test /mnt/data/home/user/hmi-test'
 scp "$HOME/weston-mirror/build-aarch64/mirror-output.so" root@"$BOARD_IP":/usr/lib/weston/ &
 scp "$SCRIPT_DIR/build-aarch64/hw-test" root@"$BOARD_IP":/mnt/data/home/user/hw-test &
+scp "$HOME/hmi-test/build-aarch64/hmi-test" root@"$BOARD_IP":/mnt/data/home/user/hmi-test &
 scp "$SCRIPT_DIR/assets/left.wav" "$SCRIPT_DIR/assets/right.wav" root@"$BOARD_IP":/usr/share/hw-test/ &
 wait
 echo "파일 배포 완료"
@@ -49,7 +50,7 @@ Environment=WAYLAND_DISPLAY=wayland-1
 Environment=XDG_RUNTIME_DIR=/run/user/1201
 ExecStartPre=/bin/sh -c 'echo 255 > /sys/class/backlight/backlight-lvds/brightness; echo on > /sys/class/backlight/backlight-lvds/power/control'
 ExecStartPre=/bin/sleep 8
-ExecStart=/mnt/data/home/user/hw-test
+ExecStart=/mnt/data/home/user/hmi-test
 Restart=on-failure
 RestartSec=3
 
@@ -65,7 +66,7 @@ udevadm control --reload-rules
 systemctl mask systemd-backlight@backlight:backlight-lvds.service 2>/dev/null || true
 systemctl enable sshd
 systemctl enable chronyd && systemctl start chronyd
-chmod +x /mnt/data/home/user/hw-test
+chmod +x /mnt/data/home/user/hw-test /mnt/data/home/user/hmi-test
 mkdir -p /usr/share/hw-test
 systemctl daemon-reload
 systemctl enable hw-test
