@@ -68,6 +68,42 @@ systemctl enable sshd
 systemctl enable chronyd && systemctl start chronyd
 chmod +x /mnt/data/home/user/hw-test /mnt/data/home/user/hmi-test
 mkdir -p /usr/share/hw-test
+
+# 네트워크 고정 IP (LAN1=192.168.1.100, LAN2=192.168.2.100)
+mkdir -p /etc/NetworkManager/system-connections
+cat > /etc/NetworkManager/system-connections/eth0.nmconnection << 'EOF'
+[connection]
+id=eth0
+type=ethernet
+interface-name=eth0
+
+[ethernet]
+
+[ipv4]
+address1=192.168.1.100/24,192.168.1.1
+method=manual
+
+[ipv6]
+method=disabled
+EOF
+cat > /etc/NetworkManager/system-connections/eth1.nmconnection << 'EOF'
+[connection]
+id=eth1
+type=ethernet
+interface-name=eth1
+
+[ethernet]
+
+[ipv4]
+address1=192.168.2.100/24
+method=manual
+
+[ipv6]
+method=disabled
+EOF
+chmod 600 /etc/NetworkManager/system-connections/eth0.nmconnection
+chmod 600 /etc/NetworkManager/system-connections/eth1.nmconnection
+nmcli connection reload 2>/dev/null || true
 systemctl daemon-reload
 systemctl enable hw-test
 
