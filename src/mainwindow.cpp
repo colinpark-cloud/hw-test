@@ -219,6 +219,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     devRow->addWidget(makeDevCard("오디오",     &m_audioBtn, &m_audioRes), 1);
     devRow->addWidget(makeDevCard("USB1",        &m_usb1Btn,  &m_usb1Res),  1);
     devRow->addWidget(makeDevCard("USB2",        &m_usb2Btn,  &m_usb2Res),  1);
+    devRow->addWidget(makeDevCard("USB3",        &m_usb3Btn,  &m_usb3Res),  1);
     devRow->addWidget(makeDevCard("SD카드",      &m_sdBtn,    &m_sdRes),    1);
     devRow->addWidget(makeDevCard("eMMC",        &m_emmcBtn,  &m_emmcRes),  1);
     devRow->addWidget(makeDevCard("EXP",         &m_expBtn,   &m_expRes),   1);
@@ -227,6 +228,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_audioBtn, &QPushButton::clicked, this, &MainWindow::testAudio);
     connect(m_usb1Btn,  &QPushButton::clicked, this, [this]{ testUsb(0); });
     connect(m_usb2Btn,  &QPushButton::clicked, this, [this]{ testUsb(1); });
+    connect(m_usb3Btn,  &QPushButton::clicked, this, [this]{ testUsb(2); });
     connect(m_sdBtn,    &QPushButton::clicked, this, &MainWindow::testSd);
     connect(m_emmcBtn,  &QPushButton::clicked, this, &MainWindow::testEmmc);
     connect(m_expBtn,   &QPushButton::clicked, this, &MainWindow::testExp);
@@ -414,46 +416,71 @@ bool MainWindow::runStorageRW(const QString& devNode, const QString& label) {
 }
 
 void MainWindow::testAudio() {
-    m_audioRes->setText("...");
-    m_audioRes->setStyleSheet("font-size:11px;color:#6b7a8d;background:#f0f4f8;"
-                              "border:1px solid #d1d9e0;border-radius:5px;");
 #ifdef Q_OS_WIN
     setDevResult(m_audioRes, m_audioBtn, false);
 #else
-    // Play left.wav (Left channel only) then right.wav (Right channel only)
+    if (m_audioPlaying) {
+        // Stop
+        m_audioPlaying = false;
+        if (m_audioProc) {
+            m_audioProc->kill();
+            m_audioProc->waitForFinished(500);
+            m_audioProc->deleteLater();
+            m_audioProc = nullptr;
+        }
+        m_audioRes->setText("중지");
+        m_audioRes->setStyleSheet("font-size:11px;font-weight:700;color:#6b7280;"
+                                  "background:#f3f4f6;border:1px solid #d1d5db;border-radius:5px;");
+        m_audioBtn->setStyleSheet(
+            "QPushButton{font-size:11px;font-weight:700;background:#17304c;color:white;"
+            "border-radius:6px;padding:4px 2px;}"
+            "QPushButton:pressed{background:#0f2035;}");
+    } else {
+        static const QString kLeft  = "/usr/share/hw-test/left.wav";
+        static const QString kRight = "/usr/share/hw-test/right.wav";
+        if (!QFile::exists(kLeft) || !QFile::exists(kRight)) {
+            setDevResult(m_audioRes, m_audioBtn, false);
+            return;
+        }
+        m_audioPlaying = true;
+        m_audioRes->setText("재생 중");
+        m_audioRes->setStyleSheet("font-size:11px;font-weight:700;color:#16a34a;"
+                                  "background:#dcfce7;border:1px solid #86efac;border-radius:5px;");
+        m_audioBtn->setStyleSheet(
+            "QPushButton{font-size:11px;font-weight:700;background:#16a34a;color:white;"
+            "border-radius:6px;padding:4px 2px;}"
+            "QPushButton:pressed{background:#15803d;}");
+        audioPlayNext(true);
+    }
+#endif
+}
+
+void MainWindow::audioPlayNext(bool playLeft) {
+#ifndef Q_OS_WIN
+    if (!m_audioPlaying) return;
     static const QString kLeft  = "/usr/share/hw-test/left.wav";
     static const QString kRight = "/usr/share/hw-test/right.wav";
-    if (!QFile::exists(kLeft) || !QFile::exists(kRight)) {
-        setDevResult(m_audioRes, m_audioBtn, false);
-        return;
-    }
-    auto *p = new QProcess(this);
-    connect(p, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, p, kRight](int code, QProcess::ExitStatus) {
-        p->deleteLater();
-        if (code != 0) { setDevResult(m_audioRes, m_audioBtn, false); return; }
-        auto *p2 = new QProcess(this);
-        connect(p2, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
-                this, [this, p2](int c2, QProcess::ExitStatus) {
-            setDevResult(m_audioRes, m_audioBtn, c2 == 0);
-            p2->deleteLater();
-        });
-        p2->start("aplay", {"-D", "hw:1,0", kRight});
+    const QString &wav = playLeft ? kLeft : kRight;
+    m_audioProc = new QProcess(this);
+    connect(m_audioProc, QOverload<int,QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, playLeft](int, QProcess::ExitStatus) {
+        if (m_audioProc) { m_audioProc->deleteLater(); m_audioProc = nullptr; }
+        audioPlayNext(!playLeft);
     });
-    p->start("aplay", {"-D", "hw:1,0", kLeft});
+    m_audioProc->start("aplay", {"-D", "hw:1,0", wav});
 #endif
 }
 
 void MainWindow::testUsb(int idx) {
-    QLabel*      res = idx == 0 ? m_usb1Res : m_usb2Res;
-    QPushButton* btn = idx == 0 ? m_usb1Btn : m_usb2Btn;
+    QLabel*      res = idx == 0 ? m_usb1Res : (idx == 1 ? m_usb2Res : m_usb3Res);
+    QPushButton* btn = idx == 0 ? m_usb1Btn : (idx == 1 ? m_usb2Btn : m_usb3Btn);
     res->setText("...");
     res->setStyleSheet("font-size:11px;color:#6b7a8d;background:#f0f4f8;"
                        "border:1px solid #d1d9e0;border-radius:5px;");
 #ifdef Q_OS_WIN
     setDevResult(res, btn, false);
 #else
-    const QString usbPath = idx == 0 ? "1-1.3" : "1-1.4";
+    const QString usbPath = idx == 0 ? "1-1.3" : (idx == 1 ? "1-1.4" : "1-1.2.4");
     // Find block device from USB port → check /proc/mounts → write/read test
     const QString cmd = QString(
         "P=$(readlink -f /sys/bus/usb/devices/%1 2>/dev/null);"

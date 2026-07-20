@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include <QLabel>
+#include <QProcess>
 #include <QPushButton>
 #include <QTimer>
 
@@ -19,7 +20,8 @@ private slots:
     void updateStatus();
     void pollIrda();
     void testAudio();
-    void testUsb(int idx);   // 0=USB1(/dev/sda) 1=USB2(/dev/sdb)
+    void testUsb(int idx);   // 0=USB1 1=USB2 2=USB3
+    void audioPlayNext(bool playLeft);
     void testSd();
     void testEmmc();
     void testExp();   // USB-to-eMMC on 1-1.1.3
@@ -49,13 +51,18 @@ private:
     QPushButton* m_audioBtn  = nullptr;
     QPushButton* m_usb1Btn   = nullptr;
     QPushButton* m_usb2Btn   = nullptr;
+    QPushButton* m_usb3Btn   = nullptr;
     QPushButton* m_sdBtn     = nullptr;
     QPushButton* m_emmcBtn   = nullptr;
     QPushButton* m_expBtn    = nullptr;
     QLabel*      m_audioRes  = nullptr;
     QLabel*      m_usb1Res   = nullptr;
     QLabel*      m_usb2Res   = nullptr;
+    QLabel*      m_usb3Res   = nullptr;
     QLabel*      m_sdRes     = nullptr;
     QLabel*      m_emmcRes   = nullptr;
     QLabel*      m_expRes    = nullptr;
+
+    bool         m_audioPlaying = false;
+    QProcess*    m_audioProc    = nullptr;
 };
