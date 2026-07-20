@@ -275,8 +275,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     { QFile f("/sys/class/backlight/backlight-lvds/power/control");
       if (f.open(QIODevice::WriteOnly)) f.write("on"); }
     QProcess::execute("sh", {"-c",
-        "amixer -c 1 sset 'Speaker' 100% on 2>/dev/null;"
-        "amixer -c 1 sset 'Headphone' 100% on 2>/dev/null"});
+        "amixer -c 0 sset 'Speaker' 100% on 2>/dev/null;"
+        "amixer -c 0 sset 'Headphone' 100% on 2>/dev/null"});
 #endif
     /* 600ms delay — sensor needs time after power-on before first measurement */
     QTimer::singleShot(600, this, &MainWindow::updateStatus);
@@ -467,7 +467,7 @@ void MainWindow::audioPlayNext(bool playLeft) {
         if (m_audioProc) { m_audioProc->deleteLater(); m_audioProc = nullptr; }
         audioPlayNext(!playLeft);
     });
-    m_audioProc->start("aplay", {"-D", "hw:1,0", wav});
+    m_audioProc->start("aplay", {"-D", "hw:0,0", wav});
 #endif
 }
 
